@@ -153,6 +153,10 @@ def create_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
         x = torch.stack([data['data'][i, start:start + seq_len] for i, start in zip(sample_indices, start_positions)])
         y = torch.stack([data['data'][i, start + 1:start + seq_len + 1] for i, start in zip(sample_indices, start_positions)])
         
+        # Convert tokens to long dtype
+        x = x.long()
+        y = y.long()
+        
         mask = torch.ones(batch_size, seq_len, dtype=torch.bool)
         
         return x, y, mask

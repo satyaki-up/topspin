@@ -8,21 +8,16 @@ from typing import List, Dict, Any
 import argparse
 
 def get_tokenizer(encoding_name: str = "cl100k_base") -> tiktoken.Encoding:
-    """Get tiktoken tokenizer."""
     return tiktoken.get_encoding(encoding_name)
 
 def load_config(config_path: str = "configs/data.yaml") -> Dict[str, Any]:
-    """Load configuration from YAML file."""
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
 def tokenize_text(text: str, tokenizer: tiktoken.Encoding) -> List[int]:
-    """Tokenize a single text string."""
-    # Handle special tokens by allowing them to be encoded as normal text
     return tokenizer.encode(text, disallowed_special=())
 
 def process_dataset(config: Dict[str, Any]) -> List[List[int]]:
-    """Download and tokenize the dataset."""
     dataset_name = config['dataset']['name']
     split = config['dataset']['split']
     max_samples = config['dataset']['max_samples']
@@ -57,7 +52,6 @@ def process_dataset(config: Dict[str, Any]) -> List[List[int]]:
 
 def save_tokenized_data(tokenized_data: List[List[int]], 
                        config: Dict[str, Any]):
-    """Save tokenized data in PyTorch format."""
     output_dir = config['output']['directory']
     filename = config['output']['filename']
     vocab_size = config['tokenizer']['vocab_size']
@@ -68,11 +62,11 @@ def save_tokenized_data(tokenized_data: List[List[int]],
     max_len = max(len(seq) for seq in tokenized_data)
     print(f"Maximum sequence length: {max_len}")
     
-    padded_data = torch.zeros(len(tokenized_data), max_len, dtype=torch.long)
+    padded_data = torch.zeros(len(tokenized_data), max_len, dtype=torch.int32)
     attention_mask = torch.zeros(len(tokenized_data), max_len, dtype=torch.bool)
     
     for i, tokens in enumerate(tokenized_data):
-        padded_data[i, :len(tokens)] = torch.tensor(tokens, dtype=torch.long)
+        padded_data[i, :len(tokens)] = torch.tensor(tokens, dtype=torch.int32)
         attention_mask[i, :len(tokens)] = True
     
     output_path = os.path.join(output_dir, filename)
@@ -89,7 +83,6 @@ def save_tokenized_data(tokenized_data: List[List[int]],
     print(f"Memory usage: {padded_data.element_size() * padded_data.nelement() / 1024**2:.2f} MB")
 
 def load_tokenized_data(data_path: str) -> Dict[str, Any]:
-    """Load tokenized data from disk."""
     data = torch.load(data_path)
     print(f"Loaded data from: {data_path}")
     print(f"Data shape: {data['data'].shape}")
