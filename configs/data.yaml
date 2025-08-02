@@ -1,0 +1,13 @@
+# Data processing configuration
+dataset:
+  name: "JeanKaddour/minipile"
+  split: "train"
+  max_samples: null  # Set to a number to limit samples, null for all
+
+tokenizer:
+  name: "cl100k_base"
+  vocab_size: 100277
+
+output:
+  directory: "data"
+  filename: "minipile_tokenized.pt"

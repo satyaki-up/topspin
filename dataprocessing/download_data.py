@@ -2,6 +2,7 @@ import os
 import json
 import torch
 import tiktoken
+import yaml
 from datasets import load_dataset
 from typing import List, Dict, Any
 import argparse
@@ -10,15 +11,22 @@ def get_tokenizer(encoding_name: str = "cl100k_base") -> tiktoken.Encoding:
     """Get tiktoken tokenizer."""
     return tiktoken.get_encoding(encoding_name)
 
+def load_config(config_path: str = "configs/data.yaml") -> Dict[str, Any]:
+    """Load configuration from YAML file."""
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
 def tokenize_text(text: str, tokenizer: tiktoken.Encoding) -> List[int]:
     """Tokenize a single text string."""
     # Handle special tokens by allowing them to be encoded as normal text
     return tokenizer.encode(text, disallowed_special=())
 
-def process_dataset(dataset_name: str = "JeanKaddour/minipile", 
-                   split: str = "train",
-                   max_samples: int = None) -> List[List[int]]:
+def process_dataset(config: Dict[str, Any]) -> List[List[int]]:
     """Download and tokenize the dataset."""
+    dataset_name = config['dataset']['name']
+    split = config['dataset']['split']
+    max_samples = config['dataset']['max_samples']
+    
     print(f"Loading dataset: {dataset_name}")
     dataset = load_dataset(dataset_name, split=split)
     
@@ -28,7 +36,8 @@ def process_dataset(dataset_name: str = "JeanKaddour/minipile",
     print(f"Dataset loaded with {len(dataset)} samples")
     
     # Get tokenizer
-    tokenizer = get_tokenizer()
+    tokenizer_name = config['tokenizer']['name']
+    tokenizer = get_tokenizer(tokenizer_name)
     print(f"Using tokenizer: {tokenizer.name}")
     
     # Tokenize all texts
@@ -50,9 +59,12 @@ def process_dataset(dataset_name: str = "JeanKaddour/minipile",
     return tokenized_data
 
 def save_tokenized_data(tokenized_data: List[List[int]], 
-                       output_dir: str = "data",
-                       filename: str = "minipile_tokenized.pt"):
+                       config: Dict[str, Any]):
     """Save tokenized data in PyTorch format."""
+    output_dir = config['output']['directory']
+    filename = config['output']['filename']
+    vocab_size = config['tokenizer']['vocab_size']
+    
     os.makedirs(output_dir, exist_ok=True)
     
     # Convert to PyTorch tensors
@@ -74,7 +86,7 @@ def save_tokenized_data(tokenized_data: List[List[int]],
         'data': padded_data,
         'attention_mask': attention_mask,
         'sequence_lengths': [len(seq) for seq in tokenized_data],
-        'vocab_size': 100277,  # cl100k_base vocab size
+        'vocab_size': vocab_size,
         'num_samples': len(tokenized_data)
     }, output_path)
     
@@ -92,35 +104,31 @@ def load_tokenized_data(data_path: str) -> Dict[str, Any]:
 
 def main():
     parser = argparse.ArgumentParser(description="Download and tokenize minipile dataset")
-    parser.add_argument("--dataset", default="JeanKaddour/minipile", help="Dataset name")
-    parser.add_argument("--split", default="train", help="Dataset split")
-    parser.add_argument("--max_samples", type=int, default=None, help="Maximum number of samples to process")
-    parser.add_argument("--output_dir", default="data", help="Output directory")
-    parser.add_argument("--filename", default="minipile_tokenized.pt", help="Output filename")
+    parser.add_argument("--config", default="configs/data.yaml", help="Path to config file")
+    parser.add_argument("--max_samples", type=int, default=None, help="Override max_samples from config")
     parser.add_argument("--load_only", action="store_true", help="Only load existing data")
     
     args = parser.parse_args()
     
+    # Load configuration
+    config = load_config(args.config)
+    
+    # Override config with command line arguments
+    if args.max_samples is not None:
+        config['dataset']['max_samples'] = args.max_samples
+    
     if args.load_only:
-        data_path = os.path.join(args.output_dir, args.filename)
+        data_path = os.path.join(config['output']['directory'], config['output']['filename'])
         if os.path.exists(data_path):
             load_tokenized_data(data_path)
         else:
             print(f"Data file not found: {data_path}")
     else:
         # Download and tokenize
-        tokenized_data = process_dataset(
-            dataset_name=args.dataset,
-            split=args.split,
-            max_samples=args.max_samples
-        )
+        tokenized_data = process_dataset(config)
         
         # Save to disk
-        save_tokenized_data(
-            tokenized_data,
-            output_dir=args.output_dir,
-            filename=args.filename
-        )
+        save_tokenized_data(tokenized_data, config)
 
 if __name__ == "__main__":
     main()
