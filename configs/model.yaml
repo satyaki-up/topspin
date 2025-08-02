@@ -1,0 +1,20 @@
+# LLaMA-style model configuration
+model:
+  n_layers: 12
+  hidden_size: 768
+  n_heads: 12
+  head_dim: 64
+  ffn_size: 3072
+  vocab_size: 32000  # Will be overridden by data vocab size
+  max_seq_len: 2048
+
+training:
+  batch_size: 4
+  seq_len: 512
+  learning_rate: 1e-4
+  num_epochs: 10
+  warmup_steps: 1000
+  weight_decay: 0.01
+
+output:
+  save_path: "models/llama_model.pt" 

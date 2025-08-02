@@ -35,12 +35,10 @@ def process_dataset(config: Dict[str, Any]) -> List[List[int]]:
     
     print(f"Dataset loaded with {len(dataset)} samples")
     
-    # Get tokenizer
     tokenizer_name = config['tokenizer']['name']
     tokenizer = get_tokenizer(tokenizer_name)
     print(f"Using tokenizer: {tokenizer.name}")
     
-    # Tokenize all texts
     tokenized_data = []
     for i, example in enumerate(dataset):
         if i % 1000 == 0:
@@ -51,7 +49,6 @@ def process_dataset(config: Dict[str, Any]) -> List[List[int]]:
         if isinstance(text, list):
             text = ' '.join(text)
         
-        # Tokenize
         tokens = tokenize_text(text, tokenizer)
         tokenized_data.append(tokens)
     
@@ -67,12 +64,10 @@ def save_tokenized_data(tokenized_data: List[List[int]],
     
     os.makedirs(output_dir, exist_ok=True)
     
-    # Convert to PyTorch tensors
     # Pad sequences to the same length for efficient batching
     max_len = max(len(seq) for seq in tokenized_data)
     print(f"Maximum sequence length: {max_len}")
     
-    # Create padded tensor
     padded_data = torch.zeros(len(tokenized_data), max_len, dtype=torch.long)
     attention_mask = torch.zeros(len(tokenized_data), max_len, dtype=torch.bool)
     
@@ -80,7 +75,6 @@ def save_tokenized_data(tokenized_data: List[List[int]],
         padded_data[i, :len(tokens)] = torch.tensor(tokens, dtype=torch.long)
         attention_mask[i, :len(tokens)] = True
     
-    # Save data
     output_path = os.path.join(output_dir, filename)
     torch.save({
         'data': padded_data,
@@ -110,10 +104,8 @@ def main():
     
     args = parser.parse_args()
     
-    # Load configuration
     config = load_config(args.config)
     
-    # Override config with command line arguments
     if args.max_samples is not None:
         config['dataset']['max_samples'] = args.max_samples
     
@@ -124,10 +116,7 @@ def main():
         else:
             print(f"Data file not found: {data_path}")
     else:
-        # Download and tokenize
         tokenized_data = process_dataset(config)
-        
-        # Save to disk
         save_tokenized_data(tokenized_data, config)
 
 if __name__ == "__main__":
