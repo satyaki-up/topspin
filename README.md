@@ -2,21 +2,40 @@
 
 A minimalistic library for training text-only dense LLMs on a single NVIDIA node (8 GPUs).
 
-## Overview
-
-topspin provides a streamlined approach to training large language models with a focus on simplicity and efficiency. Designed specifically for single-node NVIDIA GPU setups, it eliminates the complexity of distributed training while maintaining the performance needed for effective model training.
-
-## Features
-
-- **Single Node Training**: Optimized for training on a single NVIDIA GPU node
-- **Text-Only Focus**: Specialized for dense language models processing text data
-- **Minimalistic Design**: Clean, simple API that reduces boilerplate code
-- **Efficient Training**: Optimized training loops and memory management
-- **Easy Setup**: Minimal dependencies and straightforward configuration
 
 ## Getting Started
 
-*Documentation and installation instructions coming soon.*
+### Installation
+
+```bash
+git clone https://github.com/satyaki-up/topspin.git
+cd topspin
+pip install -r requirements.txt
+```
+
+### Data Prep
+
+```bash
+# Download and tokenize the full dataset (1M samples)
+python dataprocessing/download_data.py
+
+# Or download a smaller subset for testing
+python dataprocessing/download_data.py --max_samples 1000
+```
+
+Check configs/data.yaml for more details.
+
+### Training
+
+```bash
+# Default
+python trainer/train.py --data_path data/minipile_tokenized.pt
+
+# Custom
+python trainer/train.py --data_path data/minipile_tokenized.pt --config configs/model.yaml
+```
+
+Check configs/model.yaml for more details.
 
 ## License
 
