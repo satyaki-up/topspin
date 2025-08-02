@@ -77,7 +77,6 @@ class Attention(nn.Module):
         return self.wo(out)
 
 class FeedForward(nn.Module):
-    """Feed-forward network with SwiGLU activation."""
     def __init__(self, config):
         super().__init__()
         self.w1 = nn.Linear(config['hidden_size'], config['ffn_size'], bias=False)
@@ -161,7 +160,6 @@ def create_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
     return get_batch
 
 def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 1e-4):
-    """Train the model."""
     device = next(model.parameters()).device
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
@@ -209,6 +207,10 @@ def main():
     print("Loading data...")
     data = load_data(args.data_path)
     print(f"Data loaded: {data['data'].shape}")
+    
+    # Calculate and print number of tokens
+    total_tokens = data['data'].numel()
+    print(f"Total tokens: {total_tokens:,}")
     
     config['model']['vocab_size'] = data['vocab_size']
     print(f"Model config: {config['model']}")

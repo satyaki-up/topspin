@@ -1,45 +1,4 @@
-# Core ML and Deep Learning
 torch
-numpy
-scipy
-
-# Configuration and Data Handling
-omegaconf
 pyyaml
-packaging
-safetensors
-dacite
-msgspec
-orjson
-
-# Text Processing and Tokenization
-sentencepiece
 tiktoken
-tqdm
-
-# Datasets and Evaluation
 datasets
-rouge-score
-sacrebleu
-lm-eval
-
-# Monitoring and Visualization
-wandb
-viztracer
-pynvml
-
-# File and Data Management
-blobfile
-datatrove
-
-# Type Checking
-torchtyping
-
-# Optional: Flash Attention for faster training
-flash-attn
-
-# Optional: Transformers for model loading
-transformers
-
-# Optional: Numba for JIT compilation
-numba

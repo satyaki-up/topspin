@@ -36,7 +36,3 @@ python trainer/train.py --data_path data/minipile_tokenized.pt --config configs/
 ```
 
 Check configs/model.yaml for more details.
-
-## License
-
-*License information to be added.* 
