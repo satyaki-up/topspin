@@ -6,6 +6,9 @@ import yaml
 import argparse
 from typing import Optional, Tuple
 import os
+import pandas as pd
+import json
+import glob
 
 class RMSNorm(nn.Module):
     def __init__(self, hidden_size: int, eps: float = 1e-6):
@@ -139,9 +142,51 @@ def load_model_config(config_path: str = "configs/model.yaml") -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
+def load_sharded_data(data_dir: str) -> dict:
+    metadata_path = os.path.join(data_dir, 'metadata.json')
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f)
+    
+    shard_pattern = os.path.join(data_dir, 'shard_*.parquet')
+    shard_files = sorted(glob.glob(shard_pattern))
+    
+    print(f"Found {len(shard_files)} shard files")
+    
+    all_tokens = []
+    all_sequence_lengths = []
+    
+    for i, shard_file in enumerate(shard_files):
+        if i % 10 == 0 or i == len(shard_files) - 1:
+            print(f"Loading shard {i+1}/{len(shard_files)}...")
+        
+        df = pd.read_parquet(shard_file)
+        all_tokens.extend(df['tokens'].tolist())
+        all_sequence_lengths.extend(df['sequence_length'].tolist())
+    
+    max_len = max(all_sequence_lengths)
+    num_samples = len(all_tokens)
+    
+    padded_data = torch.zeros(num_samples, max_len, dtype=torch.long)
+    attention_mask = torch.zeros(num_samples, max_len, dtype=torch.bool)
+    
+    for i, tokens in enumerate(all_tokens):
+        padded_data[i, :len(tokens)] = torch.tensor(tokens, dtype=torch.long)
+        attention_mask[i, :len(tokens)] = True
+    
+    return {
+        'data': padded_data,
+        'attention_mask': attention_mask,
+        'sequence_lengths': all_sequence_lengths,
+        'vocab_size': metadata['vocab_size'],
+        'num_samples': num_samples
+    }
+
 def load_data(data_path: str) -> dict:
-    data = torch.load(data_path)
-    return data
+    if data_path.endswith('.pt'):
+        data = torch.load(data_path)
+        return data
+    else:
+        return load_sharded_data(data_path)
 
 def create_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
     num_samples, max_seq_len = data['data'].shape
@@ -200,7 +245,7 @@ def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 
 
 def main():
     parser = argparse.ArgumentParser(description="Train LLaMA-style model")
-    parser.add_argument("--data_path", default="data/minipile_tokenized.pt", help="Path to tokenized data")
+    parser.add_argument("--data_path", default="data", help="Path to data directory (for sharded) or .pt file (for legacy)")
     parser.add_argument("--config", default="configs/model.yaml", help="Path to model config")
     
     args = parser.parse_args()

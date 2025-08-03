@@ -2,3 +2,5 @@ torch
 pyyaml
 tiktoken
 datasets
+pandas
+psutil
