@@ -166,8 +166,12 @@ def load_sharded_data(data_dir: str) -> dict:
     max_len = max(all_sequence_lengths)
     num_samples = len(all_tokens)
     
+    print(f"Creating padded tensor: {num_samples} x {max_len}")
     padded_data = torch.zeros(num_samples, max_len, dtype=torch.long)
     attention_mask = torch.zeros(num_samples, max_len, dtype=torch.bool)
+    
+    print(f"Padded data tensor size: {padded_data.shape}, memory: {padded_data.element_size() * padded_data.nelement() / 1024**2:.2f} MB")
+    print(f"Attention mask tensor size: {attention_mask.shape}, memory: {attention_mask.element_size() * attention_mask.nelement() / 1024**2:.2f} MB")
     
     for i, tokens in enumerate(all_tokens):
         padded_data[i, :len(tokens)] = torch.tensor(tokens, dtype=torch.long)
@@ -190,6 +194,7 @@ def load_data(data_path: str) -> dict:
 
 def create_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
     num_samples, max_seq_len = data['data'].shape
+    print(f"Creating dataloader: {num_samples} samples, max_seq_len: {max_seq_len}, batch_size: {batch_size}, seq_len: {seq_len}")
     
     def get_batch():
         sample_indices = torch.randint(0, num_samples, (batch_size,))
@@ -204,6 +209,9 @@ def create_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
         
         mask = torch.ones(batch_size, seq_len, dtype=torch.bool)
         
+        print(f"Batch tensors - x: {x.shape}, y: {y.shape}, mask: {mask.shape}")
+        print(f"Batch memory - x: {x.element_size() * x.nelement() / 1024**2:.2f} MB, y: {y.element_size() * y.nelement() / 1024**2:.2f} MB")
+        
         return x, y, mask
     
     return get_batch
@@ -212,6 +220,10 @@ def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 
     device = next(model.parameters()).device
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
+    
+    print(f"Training on device: {device}")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Model memory: {sum(p.element_size() * p.nelement() for p in model.parameters()) / 1024**2:.2f} MB")
     
     model.train()
     
@@ -223,11 +235,18 @@ def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 
             x, y, mask = dataloader()
             x, y, mask = x.to(device), y.to(device), mask.to(device)
             
+            if batch_idx == 0:  # Log first batch of each epoch
+                print(f"Epoch {epoch+1} - Device tensors - x: {x.shape}, y: {y.shape}, mask: {mask.shape}")
+                print(f"Device memory - x: {x.element_size() * x.nelement() / 1024**2:.2f} MB, y: {y.element_size() * y.nelement() / 1024**2:.2f} MB")
+            
             optimizer.zero_grad()
             
             logits = model(x, mask)
+            print(f"Logits shape: {logits.shape}, memory: {logits.element_size() * logits.nelement() / 1024**2:.2f} MB")
+            
             logits = logits.view(-1, logits.size(-1))
             y = y.view(-1)
+            print(f"Reshaped - logits: {logits.shape}, y: {y.shape}")
             
             loss = criterion(logits, y)
             
@@ -273,6 +292,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     print(f"Using device: {device}")
+    print(f"Model moved to device, total model memory: {sum(p.element_size() * p.nelement() for p in model.parameters()) / 1024**2:.2f} MB")
     
     dataloader = create_dataloader(data, config['training']['batch_size'], config['training']['seq_len'])
     

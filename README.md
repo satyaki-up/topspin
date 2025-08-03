@@ -16,11 +16,7 @@ pip install -r requirements.txt
 ### Data Prep
 
 ```bash
-# Download and tokenize the full dataset (1M samples)
-python dataprocessing/download_data.py
-
-# Or download a smaller subset for testing
-python dataprocessing/download_data.py --max_samples 1000
+python dataprocessing/download_data.py --max_samples 1000000 --shard_size 10000
 ```
 
 Check configs/data.yaml for more details.
@@ -28,11 +24,7 @@ Check configs/data.yaml for more details.
 ### Training
 
 ```bash
-# Default
-python trainer/train.py --data_path data/minipile_tokenized.pt
-
-# Custom
-python trainer/train.py --data_path data/minipile_tokenized.pt --config configs/model.yaml
+python trainer/train.py --data_path data
 ```
 
 Check configs/model.yaml for more details.
