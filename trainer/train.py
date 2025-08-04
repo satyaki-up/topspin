@@ -150,71 +150,76 @@ def load_sharded_data(data_dir: str) -> dict:
     shard_pattern = os.path.join(data_dir, 'shard_*.parquet')
     shard_files = sorted(glob.glob(shard_pattern))
     
-    print(f"Found {len(shard_files)} shard files")
-    
-    all_tokens = []
-    all_sequence_lengths = []
-    
-    for i, shard_file in enumerate(shard_files):
-        if i % 10 == 0 or i == len(shard_files) - 1:
-            print(f"Loading shard {i+1}/{len(shard_files)}...")
-        
-        df = pd.read_parquet(shard_file)
-        all_tokens.extend(df['tokens'].tolist())
-        all_sequence_lengths.extend(df['sequence_length'].tolist())
-    
-    max_len = max(all_sequence_lengths)
-    num_samples = len(all_tokens)
-    
-    print(f"Creating padded tensor: {num_samples} x {max_len}")
-    padded_data = torch.zeros(num_samples, max_len, dtype=torch.long)
-    attention_mask = torch.zeros(num_samples, max_len, dtype=torch.bool)
-    
-    print(f"Padded data tensor size: {padded_data.shape}, memory: {padded_data.element_size() * padded_data.nelement() / 1024**2:.2f} MB")
-    print(f"Attention mask tensor size: {attention_mask.shape}, memory: {attention_mask.element_size() * attention_mask.nelement() / 1024**2:.2f} MB")
-    
-    for i, tokens in enumerate(all_tokens):
-        padded_data[i, :len(tokens)] = torch.tensor(tokens, dtype=torch.long)
-        attention_mask[i, :len(tokens)] = True
+    print(f"Found {len(shard_files)} shard files for streaming")
+    print(f"Total samples: {metadata['total_samples']:,}")
+    print(f"Vocab size: {metadata['vocab_size']}")
+    print(f"Max sequence length: {metadata['max_sequence_length']}")
     
     return {
-        'data': padded_data,
-        'attention_mask': attention_mask,
-        'sequence_lengths': all_sequence_lengths,
+        'shard_files': shard_files,
+        'metadata': metadata,
         'vocab_size': metadata['vocab_size'],
-        'num_samples': num_samples
+        'num_samples': metadata['total_samples']
     }
 
 def load_data(data_path: str) -> dict:
-    if data_path.endswith('.pt'):
-        data = torch.load(data_path)
-        return data
-    else:
-        return load_sharded_data(data_path)
+    return load_sharded_data(data_path)
 
-def create_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
-    num_samples, max_seq_len = data['data'].shape
-    print(f"Creating dataloader: {num_samples} samples, max_seq_len: {max_seq_len}, batch_size: {batch_size}, seq_len: {seq_len}")
+def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
+    shard_files = data['shard_files']
+    metadata = data['metadata']
+    total_samples = metadata['total_samples']
+    
+    print(f"Creating streaming dataloader: {total_samples} samples, batch_size: {batch_size}, seq_len: {seq_len}")
+    print(f"Will load shards on-demand during training")
+    
+    print("Loading shard metadata...")
+    shard_data = []
+    for i, shard_file in enumerate(shard_files):
+        if i % 10 == 0 or i == len(shard_files) - 1:
+            print(f"Loading shard metadata {i+1}/{len(shard_files)}...")
+        df = pd.read_parquet(shard_file)
+        shard_data.append(df)
+    
+    print(f"All shards loaded in memory (as DataFrames)")
     
     def get_batch():
-        sample_indices = torch.randint(0, num_samples, (batch_size,))
-        start_positions = torch.randint(0, max_seq_len - seq_len - 1, (batch_size,))
+        batch_tokens = []
+        batch_lengths = []
         
-        x = torch.stack([data['data'][i, start:start + seq_len] for i, start in zip(sample_indices, start_positions)])
-        y = torch.stack([data['data'][i, start + 1:start + seq_len + 1] for i, start in zip(sample_indices, start_positions)])
+        for _ in range(batch_size):
+            shard_idx = torch.randint(0, len(shard_data), (1,)).item()
+            shard_df = shard_data[shard_idx]
+            
+            sample_idx = torch.randint(0, len(shard_df), (1,)).item()
+            tokens = shard_df.iloc[sample_idx]['tokens']
+            seq_len_actual = shard_df.iloc[sample_idx]['sequence_length']
+            
+            batch_tokens.append(tokens)
+            batch_lengths.append(seq_len_actual)
         
-        # Convert tokens to long dtype
-        x = x.long()
-        y = y.long()
+        x = torch.zeros(batch_size, seq_len, dtype=torch.long)
+        y = torch.zeros(batch_size, seq_len, dtype=torch.long)
+        mask = torch.zeros(batch_size, seq_len, dtype=torch.bool)
         
-        mask = torch.ones(batch_size, seq_len, dtype=torch.bool)
-        
-        print(f"Batch tensors - x: {x.shape}, y: {y.shape}, mask: {mask.shape}")
-        print(f"Batch memory - x: {x.element_size() * x.nelement() / 1024**2:.2f} MB, y: {y.element_size() * y.nelement() / 1024**2:.2f} MB")
+        for i, (tokens, length) in enumerate(zip(batch_tokens, batch_lengths)):
+            if length > seq_len:
+                start_pos = torch.randint(0, length - seq_len - 1, (1,)).item()
+                end_pos = start_pos + seq_len
+                x[i] = torch.tensor(tokens[start_pos:end_pos], dtype=torch.long)
+                y[i] = torch.tensor(tokens[start_pos + 1:end_pos + 1], dtype=torch.long)
+                mask[i] = True
+            else:
+                x[i, :length-1] = torch.tensor(tokens[:-1], dtype=torch.long)
+                y[i, :length-1] = torch.tensor(tokens[1:], dtype=torch.long)
+                mask[i, :length-1] = True
         
         return x, y, mask
     
     return get_batch
+
+def create_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
+    return create_streaming_dataloader(data, batch_size, seq_len)
 
 def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 1e-4):
     device = next(model.parameters()).device
@@ -235,18 +240,12 @@ def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 
             x, y, mask = dataloader()
             x, y, mask = x.to(device), y.to(device), mask.to(device)
             
-            if batch_idx == 0:  # Log first batch of each epoch
-                print(f"Epoch {epoch+1} - Device tensors - x: {x.shape}, y: {y.shape}, mask: {mask.shape}")
-                print(f"Device memory - x: {x.element_size() * x.nelement() / 1024**2:.2f} MB, y: {y.element_size() * y.nelement() / 1024**2:.2f} MB")
-            
             optimizer.zero_grad()
             
             logits = model(x, mask)
-            print(f"Logits shape: {logits.shape}, memory: {logits.element_size() * logits.nelement() / 1024**2:.2f} MB")
             
             logits = logits.view(-1, logits.size(-1))
             y = y.view(-1)
-            print(f"Reshaped - logits: {logits.shape}, y: {y.shape}")
             
             loss = criterion(logits, y)
             
@@ -264,7 +263,7 @@ def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 
 
 def main():
     parser = argparse.ArgumentParser(description="Train LLaMA-style model")
-    parser.add_argument("--data_path", default="data", help="Path to data directory (for sharded) or .pt file (for legacy)")
+    parser.add_argument("--data_path", default="data", help="Path to data directory with sharded parquet files")
     parser.add_argument("--config", default="configs/model.yaml", help="Path to model config")
     
     args = parser.parse_args()
@@ -274,11 +273,9 @@ def main():
     
     print("Loading data...")
     data = load_data(args.data_path)
-    print(f"Data loaded: {data['data'].shape}")
     
-    # Calculate and print number of tokens
-    total_tokens = data['data'].numel()
-    print(f"Total tokens: {total_tokens:,}")
+    print(f"Streaming data loaded: {data['num_samples']:,} samples")
+    print(f"Total tokens: {data['metadata']['total_tokens']:,}")
     
     config['model']['vocab_size'] = data['vocab_size']
     print(f"Model config: {config['model']}")
