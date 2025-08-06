@@ -9,6 +9,7 @@ import os
 import pandas as pd
 import json
 import glob
+import wandb
 
 class RMSNorm(nn.Module):
     def __init__(self, hidden_size: int, eps: float = 1e-6):
@@ -204,7 +205,7 @@ def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 
         
         for i, (tokens, length) in enumerate(zip(batch_tokens, batch_lengths)):
             if length > seq_len:
-                start_pos = torch.randint(0, length - seq_len - 1, (1,)).item()
+                start_pos = torch.randint(0, length - seq_len, (1,)).item()
                 end_pos = start_pos + seq_len
                 x[i] = torch.tensor(tokens[start_pos:end_pos], dtype=torch.long)
                 y[i] = torch.tensor(tokens[start_pos + 1:end_pos + 1], dtype=torch.long)
@@ -221,7 +222,7 @@ def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 
 def create_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
     return create_streaming_dataloader(data, batch_size, seq_len)
 
-def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 1e-4):
+def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 1e-4, config: dict = None, data: dict = None):
     device = next(model.parameters()).device
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
@@ -230,11 +231,38 @@ def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Model memory: {sum(p.element_size() * p.nelement() for p in model.parameters()) / 1024**2:.2f} MB")
     
+    wandb_config = {
+        "model": config['model'] if config else {},
+        "training": {
+            "learning_rate": lr,
+            "num_epochs": num_epochs,
+            "batch_size": 4,
+            "seq_len": 512,
+        },
+        "device": str(device),
+        "total_parameters": sum(p.numel() for p in model.parameters()),
+    }
+    
+    if data and 'metadata' in data:
+        wandb_config["data"] = {
+            "num_samples": data['num_samples'],
+            "total_tokens": data['metadata']['total_tokens'],
+            "vocab_size": data['vocab_size'],
+            "max_sequence_length": data['metadata']['max_sequence_length'],
+            "num_shards": data['metadata']['num_shards']
+        }
+    
+    wandb.init(
+        project="topspin",
+        config=wandb_config
+    )
+    
     model.train()
     
     for epoch in range(num_epochs):
         total_loss = 0
         num_batches = 0
+        epoch_losses = []
         
         for batch_idx in range(100):  # 100 batches per epoch
             x, y, mask = dataloader()
@@ -252,14 +280,31 @@ def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 
             loss.backward()
             optimizer.step()
             
-            total_loss += loss.item()
+            loss_value = loss.item()
+            total_loss += loss_value
             num_batches += 1
+            epoch_losses.append(loss_value)
             
             if batch_idx % 10 == 0:
-                print(f"Epoch {epoch+1}, Batch {batch_idx}, Loss: {loss.item():.4f}")
+                print(f"Epoch {epoch+1}, Batch {batch_idx}, Loss: {loss_value:.4f}")
+                wandb.log({
+                    "batch_loss": loss_value,
+                    "epoch": epoch + 1,
+                    "batch": batch_idx,
+                    "learning_rate": optimizer.param_groups[0]['lr']
+                })
         
         avg_loss = total_loss / num_batches
         print(f"Epoch {epoch+1} completed. Average loss: {avg_loss:.4f}")
+        
+        wandb.log({
+            "epoch": epoch + 1,
+            "epoch_loss": avg_loss,
+            "epoch_loss_std": torch.tensor(epoch_losses).std().item(),
+            "learning_rate": optimizer.param_groups[0]['lr']
+        })
+    
+    wandb.finish()
 
 def main():
     parser = argparse.ArgumentParser(description="Train LLaMA-style model")
@@ -295,7 +340,7 @@ def main():
     
     print("Starting training...")
     lr = float(config['training']['learning_rate'])
-    train_model(model, dataloader, config['training']['num_epochs'], lr)
+    train_model(model, dataloader, config['training']['num_epochs'], lr, config, data)
     
     save_path = config['output']['save_path']
     os.makedirs(os.path.dirname(save_path), exist_ok=True)

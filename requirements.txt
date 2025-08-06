@@ -4,3 +4,4 @@ tiktoken
 datasets
 pandas
 psutil
+wandb
