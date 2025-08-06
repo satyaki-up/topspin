@@ -27,7 +27,7 @@ def process_dataset_in_shards(config: Dict[str, Any]) -> None:
     dataset_name = config['dataset']['name']
     split = config['dataset']['split']
     max_samples = config['dataset']['max_samples']
-    shard_size = config.get('shard_size', 10000)  # Process 10k samples per shard
+    shard_size = config.get('shard_size', 10000)
     
     print(f"Loading dataset: {dataset_name}")
     dataset = load_dataset(dataset_name, split=split)
@@ -43,11 +43,9 @@ def process_dataset_in_shards(config: Dict[str, Any]) -> None:
     tokenizer = get_tokenizer(tokenizer_name)
     print(f"Using tokenizer: {tokenizer.name}")
     
-    # Create output directory
     output_dir = config['output']['directory']
     os.makedirs(output_dir, exist_ok=True)
     
-    # Process in shards
     num_shards = (total_samples + shard_size - 1) // shard_size
     print(f"Processing in {num_shards} shards of {shard_size} samples each")
     
@@ -61,10 +59,8 @@ def process_dataset_in_shards(config: Dict[str, Any]) -> None:
         if shard_idx % 10 == 0 or shard_idx == num_shards - 1:
             print(f"Processing shard {shard_idx + 1}/{num_shards}...")
         
-        # Load shard
         shard_dataset = dataset.select(range(start_idx, end_idx))
         
-        # Tokenize shard
         shard_tokens = []
         for i, example in enumerate(shard_dataset):
             text = example.get('text', example.get('content', str(example)))
@@ -76,11 +72,9 @@ def process_dataset_in_shards(config: Dict[str, Any]) -> None:
             all_sequence_lengths.append(len(tokens))
             total_tokens += len(tokens)
         
-        # Save shard as parquet
         shard_filename = f"shard_{shard_idx:04d}.parquet"
         shard_path = os.path.join(output_dir, shard_filename)
         
-        # Convert to DataFrame and save
         shard_data = {
             'tokens': shard_tokens,
             'sequence_length': [len(tokens) for tokens in shard_tokens]
@@ -88,10 +82,8 @@ def process_dataset_in_shards(config: Dict[str, Any]) -> None:
         df = pd.DataFrame(shard_data)
         df.to_parquet(shard_path, index=False)
         
-        # Clear memory
         del shard_dataset, shard_tokens, shard_data, df
     
-    # Save metadata
     metadata = {
         'num_shards': num_shards,
         'total_samples': total_samples,
@@ -121,7 +113,6 @@ def save_tokenized_data(tokenized_data: List[List[int]],
     
     os.makedirs(output_dir, exist_ok=True)
     
-    # Pad sequences to the same length for efficient batching
     max_len = max(len(seq) for seq in tokenized_data)
     print(f"Maximum sequence length: {max_len}")
     

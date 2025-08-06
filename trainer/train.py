@@ -163,9 +163,6 @@ def load_sharded_data(data_dir: str) -> dict:
         'num_samples': metadata['total_samples']
     }
 
-def load_data(data_path: str) -> dict:
-    return load_sharded_data(data_path)
-
 def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
     shard_files = data['shard_files']
     metadata = data['metadata']
@@ -317,7 +314,7 @@ def main():
     config = load_model_config(args.config)
     
     print("Loading data...")
-    data = load_data(args.data_path)
+    data = load_sharded_data(args.data_path)
     
     print(f"Streaming data loaded: {data['num_samples']:,} samples")
     print(f"Total tokens: {data['metadata']['total_tokens']:,}")
