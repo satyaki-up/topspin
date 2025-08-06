@@ -163,7 +163,7 @@ def load_sharded_data(data_dir: str) -> dict:
         'num_samples': metadata['total_samples']
     }
 
-def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
+def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 1024):
     shard_files = data['shard_files']
     metadata = data['metadata']
     total_samples = metadata['total_samples']
@@ -216,10 +216,7 @@ def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 
     
     return get_batch
 
-def create_dataloader(data: dict, batch_size: int = 4, seq_len: int = 512):
-    return create_streaming_dataloader(data, batch_size, seq_len)
-
-def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 1e-4, config: dict = None, data: dict = None):
+def train_model(model: nn.Module, dataloader, batch_size: int = 10, lr: float = 1e-4, config: dict = None, data: dict = None):
     device = next(model.parameters()).device
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
@@ -228,13 +225,16 @@ def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Model memory: {sum(p.element_size() * p.nelement() for p in model.parameters()) / 1024**2:.2f} MB")
     
+    total_samples = data['num_samples'] if data else 0
+    total_batches = total_samples // batch_size
+    
     wandb_config = {
         "model": config['model'] if config else {},
         "training": {
             "learning_rate": lr,
-            "num_epochs": num_epochs,
-            "batch_size": 4,
-            "seq_len": 512,
+            "batch_size": batch_size,
+            "seq_len": 1024,
+            "total_batches": total_batches,
         },
         "device": str(device),
         "total_parameters": sum(p.numel() for p in model.parameters()),
@@ -256,50 +256,48 @@ def train_model(model: nn.Module, dataloader, num_epochs: int = 10, lr: float = 
     
     model.train()
     
-    for epoch in range(num_epochs):
-        total_loss = 0
-        num_batches = 0
-        epoch_losses = []
+    total_loss = 0
+    batch_losses = []
+    
+    print(f"Training for {total_batches} batches ({total_samples} samples with batch_size {batch_size})")
+    
+    for batch_idx in range(total_batches):
+        x, y, mask = dataloader()
+        x, y, mask = x.to(device), y.to(device), mask.to(device)
         
-        for batch_idx in range(100):  # 100 batches per epoch
-            x, y, mask = dataloader()
-            x, y, mask = x.to(device), y.to(device), mask.to(device)
-            
-            optimizer.zero_grad()
-            
-            logits = model(x, mask)
-            
-            logits = logits.view(-1, logits.size(-1))
-            y = y.view(-1)
-            
-            loss = criterion(logits, y)
-            
-            loss.backward()
-            optimizer.step()
-            
-            loss_value = loss.item()
-            total_loss += loss_value
-            num_batches += 1
-            epoch_losses.append(loss_value)
-            
-            if batch_idx % 10 == 0:
-                print(f"Epoch {epoch+1}, Batch {batch_idx}, Loss: {loss_value:.4f}")
-                wandb.log({
-                    "batch_loss": loss_value,
-                    "epoch": epoch + 1,
-                    "batch": batch_idx,
-                    "learning_rate": optimizer.param_groups[0]['lr']
-                })
+        optimizer.zero_grad()
         
-        avg_loss = total_loss / num_batches
-        print(f"Epoch {epoch+1} completed. Average loss: {avg_loss:.4f}")
+        logits = model(x, mask)
         
-        wandb.log({
-            "epoch": epoch + 1,
-            "epoch_loss": avg_loss,
-            "epoch_loss_std": torch.tensor(epoch_losses).std().item(),
-            "learning_rate": optimizer.param_groups[0]['lr']
-        })
+        logits = logits.view(-1, logits.size(-1))
+        y = y.view(-1)
+        
+        loss = criterion(logits, y)
+        
+        loss.backward()
+        optimizer.step()
+        
+        loss_value = loss.item()
+        total_loss += loss_value
+        batch_losses.append(loss_value)
+        
+        if batch_idx % 100 == 0:
+            print(f"Batch {batch_idx}/{total_batches}, Loss: {loss_value:.4f}")
+            wandb.log({
+                "batch_loss": loss_value,
+                "batch": batch_idx,
+                "progress": batch_idx / total_batches,
+                "learning_rate": optimizer.param_groups[0]['lr']
+            })
+    
+    avg_loss = total_loss / total_batches
+    print(f"Training completed. Average loss: {avg_loss:.4f}")
+    
+    wandb.log({
+        "final_loss": avg_loss,
+        "loss_std": torch.tensor(batch_losses).std().item(),
+        "learning_rate": optimizer.param_groups[0]['lr']
+    })
     
     wandb.finish()
 
@@ -333,11 +331,12 @@ def main():
     print(f"Using device: {device}")
     print(f"Model moved to device, total model memory: {sum(p.element_size() * p.nelement() for p in model.parameters()) / 1024**2:.2f} MB")
     
-    dataloader = create_dataloader(data, config['training']['batch_size'], config['training']['seq_len'])
+    dataloader = create_streaming_dataloader(data, config['training']['batch_size'], config['training']['seq_len'])
     
     print("Starting training...")
     lr = float(config['training']['learning_rate'])
-    train_model(model, dataloader, config['training']['num_epochs'], lr, config, data)
+    batch_size = config['training']['batch_size']
+    train_model(model, dataloader, batch_size, lr, config, data)
     
     save_path = config['output']['save_path']
     os.makedirs(os.path.dirname(save_path), exist_ok=True)

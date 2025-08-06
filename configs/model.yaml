@@ -1,16 +1,15 @@
-# LLaMA-style model configuration
 model:
-  n_layers: 6  # Reduced from 12
-  hidden_size: 384  # Reduced from 512
-  n_heads: 6  # Reduced from 8
-  head_dim: 64  # Kept the same
-  ffn_size: 1536  # Reduced from 2048
-  vocab_size: 32000  # Will be overridden by data vocab size
+  n_layers: 6
+  hidden_size: 384
+  n_heads: 6
+  head_dim: 64
+  ffn_size: 1536
+  vocab_size: 32000
   max_seq_len: 2048
 
 training:
-  batch_size: 4
-  seq_len: 512
+  batch_size: 10
+  seq_len: 1024
   learning_rate: 1e-4
   num_epochs: 10
   warmup_steps: 1000
