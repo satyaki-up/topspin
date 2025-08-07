@@ -1,12 +1,17 @@
 import yaml
 import argparse
 import sys
+import sys
+import os
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'trainer'))
+from train import LLaMAModel
 
 def load_model_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def calculate_parameters(config: dict) -> int:
+def calculate_parameters_theoretical(config: dict) -> int:
     model_config = config['model']
     
     n_layers = model_config['n_layers']
@@ -34,13 +39,17 @@ def calculate_parameters(config: dict) -> int:
     transformer_block_params = attention_params_per_layer + ffn_params_per_layer + rms_norm_params_per_layer
     
     total_params = (
-        embedding_params +  # token embeddings
+        embedding_params +  # token embeddings (shared with output)
         n_layers * transformer_block_params +  # transformer layers
-        hidden_size +  # final RMSNorm
-        hidden_size * vocab_size  # output layer (shared with embeddings)
+        hidden_size  # final RMSNorm
+        # Note: output layer shares weights with embeddings, so no additional parameters
     )
     
     return total_params
+
+def calculate_parameters_actual(config: dict) -> int:
+    model = LLaMAModel(config['model'])
+    return sum(p.numel() for p in model.parameters())
 
 def main():
     parser = argparse.ArgumentParser(description="Calculate model parameters from config")
@@ -50,12 +59,24 @@ def main():
     
     try:
         config = load_model_config(args.config)
-        total_params = calculate_parameters(config)
-        params_millions = total_params / 1_000_000
+        
+        theoretical_params = calculate_parameters_theoretical(config)
+        actual_params = calculate_parameters_actual(config)
+        
+        theoretical_millions = theoretical_params / 1_000_000
+        actual_millions = actual_params / 1_000_000
         
         print(f"Model configuration: {config['model']}")
-        print(f"Total parameters: {total_params:,}")
-        print(f"Parameters in millions: {params_millions:.2f}M")
+        print(f"Theoretical parameters: {theoretical_params:,} ({theoretical_millions:.2f}M)")
+        print(f"Actual parameters: {actual_params:,} ({actual_millions:.2f}M)")
+        
+        if theoretical_params != actual_params:
+            diff = abs(theoretical_params - actual_params)
+            diff_millions = diff / 1_000_000
+            print(f"Difference: {diff:,} parameters ({diff_millions:.2f}M)")
+            print("Warning: Theoretical and actual parameter counts differ!")
+        else:
+            print("✓ Theoretical and actual parameter counts match!")
         
     except FileNotFoundError:
         print(f"Error: Config file not found: {args.config}")
