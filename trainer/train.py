@@ -218,6 +218,25 @@ def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 
 
 import time
 
+def clean_up_old_checkpoints(checkpoint_dir: str = "models"):
+    checkpoint_files = []
+    for filename in os.listdir(checkpoint_dir):
+        if filename.startswith("checkpoint_") and filename.endswith(".pt"):
+            try:
+                checkpoint_num = int(filename.split("_")[1].split(".")[0])
+                checkpoint_files.append((checkpoint_num, filename))
+            except ValueError:
+                continue
+    
+    checkpoint_files.sort()
+    
+    if len(checkpoint_files) > 2:
+        files_to_delete = checkpoint_files[:-2]
+        for _, filename in files_to_delete:
+            filepath = os.path.join(checkpoint_dir, filename)
+            os.remove(filepath)
+            print(f"Deleted old checkpoint: {filename}")
+
 def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, batch_idx: int, total_batches: int, 
                    loss: float, config: dict, data: dict, checkpoint_dir: str = "models"):
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -240,6 +259,8 @@ def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, batch_id
     
     torch.save(checkpoint, checkpoint_path)
     print(f"Saved checkpoint {checkpoint_num} to {checkpoint_path}")
+    
+    clean_up_old_checkpoints(checkpoint_dir)
 
 def train_model(model: nn.Module, dataloader, batch_size: int = 10, lr: float = 1e-4, config: dict = None, data: dict = None):
     device = next(model.parameters()).device
@@ -341,6 +362,8 @@ def train_model(model: nn.Module, dataloader, batch_size: int = 10, lr: float = 
     
     torch.save(final_checkpoint, final_checkpoint_path)
     print(f"Saved final checkpoint {final_checkpoint_num} to {final_checkpoint_path}")
+    
+    clean_up_old_checkpoints("models")
         
     wandb.log({
         "final_loss": avg_loss,
@@ -387,14 +410,6 @@ def main():
     batch_size = config['training']['batch_size']
     train_model(model, dataloader, batch_size, lr, config, data)
     
-    save_path = config['output']['save_path']
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'config': config['model'],
-        'vocab_size': data['vocab_size']
-    }, save_path)
-    print(f"Model saved to {save_path}")
 
 if __name__ == "__main__":
     main() 
