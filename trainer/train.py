@@ -1,266 +1,18 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import math
 import yaml
 import argparse
-from typing import Optional, Tuple
 import os
-import pandas as pd
-import json
-import glob
 import wandb
+import time
 
-class RMSNorm(nn.Module):
-    def __init__(self, hidden_size: int, eps: float = 1e-6):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.eps = eps
-
-    def forward(self, x):
-        rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return x * rms * self.weight
-
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device)
-    freqs = torch.outer(t, freqs)
-    return torch.polar(torch.ones_like(freqs), freqs)  # complex64
-
-def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
-    # x shape: (batch, heads, seq_len, head_dim)
-    # freqs_cis shape: (seq_len, head_dim//2)
-    
-    x_reshaped = x.float().reshape(*x.shape[:-1], -1, 2)
-    x_complex = torch.view_as_complex(x_reshaped)
-    
-    freqs_cis_expanded = freqs_cis.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, head_dim//2)
-    freqs_cis_expanded = freqs_cis_expanded.expand(x.shape[0], x.shape[1], -1, -1)
-    
-    result_complex = x_complex * freqs_cis_expanded
-    
-    result_real = torch.view_as_real(result_complex)
-    return result_real.reshape(*x.shape)
-
-class Attention(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.n_heads = config['n_heads']
-        self.head_dim = config['head_dim']
-        self.hidden_size = config['hidden_size']
-        
-        self.wq = nn.Linear(self.hidden_size, self.n_heads * self.head_dim, bias=False)
-        self.wk = nn.Linear(self.hidden_size, self.n_heads * self.head_dim, bias=False)
-        self.wv = nn.Linear(self.hidden_size, self.n_heads * self.head_dim, bias=False)
-        self.wo = nn.Linear(self.n_heads * self.head_dim, self.hidden_size, bias=False)
-        
-        self.register_buffer(
-            "freqs_cis",
-            precompute_freqs_cis(self.head_dim, config['max_seq_len'])
-        )
-
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        B, T, C = x.shape
-        
-        q = self.wq(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        k = self.wk(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        v = self.wv(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        
-        q = apply_rotary_emb(q, self.freqs_cis[:T])
-        k = apply_rotary_emb(k, self.freqs_cis[:T])
-        
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, float('-inf'))
-        
-        attn = F.softmax(scores, dim=-1)
-        out = torch.matmul(attn, v)
-        
-        out = out.transpose(1, 2).contiguous().view(B, T, C)
-        return self.wo(out)
-
-class FeedForward(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.w1 = nn.Linear(config['hidden_size'], config['ffn_size'], bias=False)
-        self.w2 = nn.Linear(config['ffn_size'], config['hidden_size'], bias=False)
-        self.w3 = nn.Linear(config['hidden_size'], config['ffn_size'], bias=False)
-
-    def forward(self, x):
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
-
-class TransformerBlock(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.attention = Attention(config)
-        self.feed_forward = FeedForward(config)
-        self.attention_norm = RMSNorm(config['hidden_size'])
-        self.ffn_norm = RMSNorm(config['hidden_size'])
-
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x = x + self.attention(self.attention_norm(x), mask)
-        x = x + self.feed_forward(self.ffn_norm(x))
-        return x
-
-class LLaMAModel(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        
-        self.tok_embeddings = nn.Embedding(config['vocab_size'], config['hidden_size'])
-        
-        self.layers = nn.ModuleList([
-            TransformerBlock(config) for _ in range(config['n_layers'])
-        ])
-        
-        self.norm = RMSNorm(config['hidden_size'])
-        self.output = nn.Linear(config['hidden_size'], config['vocab_size'], bias=False)
-        self.output.weight = self.tok_embeddings.weight
-
-    def forward(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        B, T = input_ids.shape
-        
-        if attention_mask is None:
-            mask = torch.tril(torch.ones(T, T, device=input_ids.device)).unsqueeze(0)
-        else:
-            mask = attention_mask.unsqueeze(1).unsqueeze(2)  # (B, 1, 1, T)
-            mask = mask.expand(-1, -1, T, -1)  # (B, 1, T, T)
-            causal_mask = torch.tril(torch.ones(T, T, device=input_ids.device))
-            mask = mask * causal_mask.unsqueeze(0).unsqueeze(0)
-
-        x = self.tok_embeddings(input_ids)
-        
-        for layer in self.layers:
-            x = layer(x, mask)
-        
-        x = self.norm(x)
-        
-        logits = self.output(x)
-        return logits
+from llama_model import LLaMAModel
+from dataprep import load_sharded_data, create_dataloader
+from checkpoints import save_checkpoint, clean_up_old_checkpoints
 
 def load_model_config(config_path: str = "configs/model_50m.yaml") -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
-
-def load_sharded_data(data_dir: str) -> dict:
-    metadata_path = os.path.join(data_dir, 'metadata.json')
-    with open(metadata_path, 'r') as f:
-        metadata = json.load(f)
-    
-    shard_pattern = os.path.join(data_dir, 'shard_*.parquet')
-    shard_files = sorted(glob.glob(shard_pattern))
-    
-    print(f"Found {len(shard_files)} shard files for streaming")
-    print(f"Total samples: {metadata['total_samples']:,}")
-    print(f"Vocab size: {metadata['vocab_size']}")
-    print(f"Max sequence length: {metadata['max_sequence_length']}")
-    
-    return {
-        'shard_files': shard_files,
-        'metadata': metadata,
-        'vocab_size': metadata['vocab_size'],
-        'num_samples': metadata['total_samples']
-    }
-
-def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 1024):
-    shard_files = data['shard_files']
-    metadata = data['metadata']
-    total_samples = metadata['total_samples']
-    
-    print(f"Creating streaming dataloader: {total_samples} samples, batch_size: {batch_size}, seq_len: {seq_len}")
-    print(f"Will load shards on-demand during training")
-    
-    print("Loading shard metadata...")
-    shard_data = []
-    for i, shard_file in enumerate(shard_files):
-        if i % 10 == 0 or i == len(shard_files) - 1:
-            print(f"Loading shard metadata {i+1}/{len(shard_files)}...")
-        df = pd.read_parquet(shard_file)
-        shard_data.append(df)
-    
-    print(f"All shards loaded in memory (as DataFrames)")
-    
-    def get_batch():
-        batch_tokens = []
-        batch_lengths = []
-        
-        for _ in range(batch_size):
-            shard_idx = torch.randint(0, len(shard_data), (1,)).item()
-            shard_df = shard_data[shard_idx]
-            
-            sample_idx = torch.randint(0, len(shard_df), (1,)).item()
-            tokens = shard_df.iloc[sample_idx]['tokens']
-            seq_len_actual = shard_df.iloc[sample_idx]['sequence_length']
-            
-            batch_tokens.append(tokens)
-            batch_lengths.append(seq_len_actual)
-        
-        x = torch.zeros(batch_size, seq_len, dtype=torch.long)
-        y = torch.zeros(batch_size, seq_len, dtype=torch.long)
-        mask = torch.zeros(batch_size, seq_len, dtype=torch.bool)
-        
-        for i, (tokens, length) in enumerate(zip(batch_tokens, batch_lengths)):
-            if length > seq_len:
-                start_pos = torch.randint(0, length - seq_len, (1,)).item()
-                end_pos = start_pos + seq_len
-                x[i] = torch.tensor(tokens[start_pos:end_pos], dtype=torch.long)
-                y[i] = torch.tensor(tokens[start_pos + 1:end_pos + 1], dtype=torch.long)
-                mask[i] = True
-            else:
-                x[i, :length-1] = torch.tensor(tokens[:-1], dtype=torch.long)
-                y[i, :length-1] = torch.tensor(tokens[1:], dtype=torch.long)
-                mask[i, :length-1] = True
-        
-        return x, y, mask
-    
-    return get_batch
-
-import time
-
-def clean_up_old_checkpoints(checkpoint_dir: str = "models"):
-    checkpoint_files = []
-    for filename in os.listdir(checkpoint_dir):
-        if filename.startswith("checkpoint_") and filename.endswith(".pt"):
-            try:
-                checkpoint_num = int(filename.split("_")[1].split(".")[0])
-                checkpoint_files.append((checkpoint_num, filename))
-            except ValueError:
-                continue
-    
-    checkpoint_files.sort()
-    
-    if len(checkpoint_files) > 2:
-        files_to_delete = checkpoint_files[:-2]
-        for _, filename in files_to_delete:
-            filepath = os.path.join(checkpoint_dir, filename)
-            os.remove(filepath)
-            print(f"Deleted old checkpoint: {filename}")
-
-def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, batch_idx: int, total_batches: int, 
-                   loss: float, config: dict, data: dict, checkpoint_dir: str = "models"):
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    checkpoint_interval = total_batches // 10
-    checkpoint_num = batch_idx // checkpoint_interval
-    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{checkpoint_num:02d}.pt")
-    
-    checkpoint = {
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'batch_idx': batch_idx,
-        'total_batches': total_batches,
-        'checkpoint_num': checkpoint_num,
-        'loss': loss,
-        'config': config,
-        'data_vocab_size': data['vocab_size'] if data else None,
-        'timestamp': torch.tensor(time.time())
-    }
-    
-    torch.save(checkpoint, checkpoint_path)
-    print(f"Saved checkpoint {checkpoint_num} to {checkpoint_path}")
-    
-    clean_up_old_checkpoints(checkpoint_dir)
 
 def train_model(model: nn.Module, dataloader, batch_size: int = 10, lr: float = 1e-4, config: dict = None, data: dict = None):
     device = next(model.parameters()).device
@@ -403,13 +155,12 @@ def main():
     print(f"Using device: {device}")
     print(f"Model moved to device, total model memory: {sum(p.element_size() * p.nelement() for p in model.parameters()) / 1024**2:.2f} MB")
     
-    dataloader = create_streaming_dataloader(data, config['training']['batch_size'], config['training']['seq_len'])
+    dataloader = create_dataloader(data, config['training']['batch_size'], config['training']['seq_len'])
     
     print("Starting training...")
     lr = float(config['training']['learning_rate'])
     batch_size = config['training']['batch_size']
     train_model(model, dataloader, batch_size, lr, config, data)
-    
 
 if __name__ == "__main__":
     main() 

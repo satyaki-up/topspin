@@ -5,7 +5,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'trainer'))
-from train import LLaMAModel
+from llama_model import LLaMAModel
 
 def load_model_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
