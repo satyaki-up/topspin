@@ -216,6 +216,31 @@ def create_streaming_dataloader(data: dict, batch_size: int = 4, seq_len: int = 
     
     return get_batch
 
+import time
+
+def save_checkpoint(model: nn.Module, optimizer: torch.optim.Optimizer, batch_idx: int, total_batches: int, 
+                   loss: float, config: dict, data: dict, checkpoint_dir: str = "models"):
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    checkpoint_interval = total_batches // 10
+    checkpoint_num = batch_idx // checkpoint_interval
+    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{checkpoint_num:02d}.pt")
+    
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'batch_idx': batch_idx,
+        'total_batches': total_batches,
+        'checkpoint_num': checkpoint_num,
+        'loss': loss,
+        'config': config,
+        'data_vocab_size': data['vocab_size'] if data else None,
+        'timestamp': torch.tensor(time.time())
+    }
+    
+    torch.save(checkpoint, checkpoint_path)
+    print(f"Saved checkpoint {checkpoint_num} to {checkpoint_path}")
+
 def train_model(model: nn.Module, dataloader, batch_size: int = 10, lr: float = 1e-4, config: dict = None, data: dict = None):
     device = next(model.parameters()).device
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -281,7 +306,12 @@ def train_model(model: nn.Module, dataloader, batch_size: int = 10, lr: float = 
         total_loss += loss_value
         batch_losses.append(loss_value)
         
-        if batch_idx % 100 == 0:
+        checkpoint_interval = total_batches // 10
+        if checkpoint_interval > 0 and (batch_idx + 1) % checkpoint_interval == 0:
+            save_checkpoint(model, optimizer, batch_idx + 1, total_batches, loss_value, config, data)
+        
+        log_interval = total_batches // 100
+        if log_interval > 0 and batch_idx % log_interval == 0:
             print(f"Batch {batch_idx}/{total_batches}, Loss: {loss_value:.4f}")
             wandb.log({
                 "batch_loss": loss_value,
@@ -290,9 +320,28 @@ def train_model(model: nn.Module, dataloader, batch_size: int = 10, lr: float = 
                 "learning_rate": optimizer.param_groups[0]['lr']
             })
     
-    avg_loss = total_loss / total_batches
+    avg_loss = total_loss / len(batch_losses)
     print(f"Training completed. Average loss: {avg_loss:.4f}")
     
+    checkpoint_interval = total_batches // 10
+    final_checkpoint_num = 10
+    final_checkpoint_path = os.path.join("models", f"checkpoint_{final_checkpoint_num:02d}.pt")
+    
+    final_checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'batch_idx': total_batches,
+        'total_batches': total_batches,
+        'checkpoint_num': final_checkpoint_num,
+        'loss': avg_loss,
+        'config': config,
+        'data_vocab_size': data['vocab_size'] if data else None,
+        'timestamp': torch.tensor(time.time())
+    }
+    
+    torch.save(final_checkpoint, final_checkpoint_path)
+    print(f"Saved final checkpoint {final_checkpoint_num} to {final_checkpoint_path}")
+        
     wandb.log({
         "final_loss": avg_loss,
         "loss_std": torch.tensor(batch_losses).std().item(),
