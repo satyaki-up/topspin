@@ -139,7 +139,7 @@ class LLaMAModel(nn.Module):
         logits = self.output(x)
         return logits
 
-def load_model_config(config_path: str = "configs/model.yaml") -> dict:
+def load_model_config(config_path: str = "configs/model_50m.yaml") -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
@@ -304,7 +304,7 @@ def train_model(model: nn.Module, dataloader, batch_size: int = 10, lr: float = 
 def main():
     parser = argparse.ArgumentParser(description="Train LLaMA-style model")
     parser.add_argument("--data_path", default="data", help="Path to data directory with sharded parquet files")
-    parser.add_argument("--config", default="configs/model.yaml", help="Path to model config")
+    parser.add_argument("--config", default="configs/model_50m.yaml", help="Path to model config")
     
     args = parser.parse_args()
     
