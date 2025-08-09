@@ -60,7 +60,6 @@ def main():
     
     if not os.path.exists("models/checkpoint_10.pt"):
         print("Error: Checkpoint not found at models/checkpoint_10.pt")
-        print("Please train the model first.")
         sys.exit(1)
     
     model, config = load_checkpoint(device=device)

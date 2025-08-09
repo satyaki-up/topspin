@@ -1,4 +1,4 @@
-# TopSpin
+# topspin
 
 A minimalistic library for training text-only dense LLMs on a single NVIDIA node (8 GPUs).
 
@@ -28,3 +28,9 @@ python trainer/train.py --data_path data
 ```
 
 Check configs/model.yaml for more details.
+
+### Inference
+
+```bash
+python utils/inference.py "Hello "
+```
